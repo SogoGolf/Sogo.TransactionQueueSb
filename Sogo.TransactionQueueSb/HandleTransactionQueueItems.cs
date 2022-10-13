@@ -71,8 +71,6 @@ public static class HandleTransactionQueueItems
                      && transactionQueueObject.Round.EntityId == "adceb3ea-52b8-4fa9-8279-633beca45417" //<== MSL 
                      && transactionQueueObject.Round.OriginalSource != "admin_panel")
             {
-                //if (_fees.Count == 0) await GetFeeCostSchedule();
-                //var costOfRound = await CalculateTokenCost(transactionQueueObject, log);
                 await CreateAndSaveTransaction(transactionQueueObject, transactionQueueObject.TokenCost, log);
             }
         }
