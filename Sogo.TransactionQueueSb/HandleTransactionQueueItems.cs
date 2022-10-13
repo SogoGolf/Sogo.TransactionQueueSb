@@ -71,9 +71,7 @@ public static class HandleTransactionQueueItems
                      && transactionQueueObject.Round.EntityId == "adceb3ea-52b8-4fa9-8279-633beca45417" //<== MSL 
                      && transactionQueueObject.Round.OriginalSource != "admin_panel")
             {
-                log.LogInformation($"<< MSL >> round we CAN charge a fee. roundid: {transactionQueueObject.Round.Id}");
-                if (_fees.Count == 0) await GetFeeCostSchedule();
-               
+                //if (_fees.Count == 0) await GetFeeCostSchedule();
                 //var costOfRound = await CalculateTokenCost(transactionQueueObject, log);
                 await CreateAndSaveTransaction(transactionQueueObject, transactionQueueObject.TokenCost, log);
             }
@@ -126,37 +124,63 @@ public static class HandleTransactionQueueItems
         }
     }
 
-    private static async Task<Transaction> CreateAndSaveTransaction(TransactionQueueObject transactionQueueObject, float costOfRound, ILogger log)
+    private static async Task<Transaction> CreateAndSaveTransaction(TransactionQueueObject transactionQueueObject, int costOfRound, ILogger log)
     {
         var currentBalance = await GetCurrentBalance(transactionQueueObject, log);
 
-        // var newTransaction = new Transaction
-        // {
-        //     Id = Uuid,
-        //     Type = "transaction",
-        //     EntityId = transactionQueueObject.EntityId,
-        //     Email = transactionQueueObject.GolferEmail,
-        //     AvailableTokens = 0,
-        //     GolferId = transactionQueueObject.GolferId,
-        //     GolferFirstName = transactionQueueObject.GolferFirstName,
-        //     GolferLastName = transactionQueueObject.GolferFirstName,
-        //     GolferEmail = transactionQueueObject.GolferEmail,
-        //     TransactionDate = DateTime.Now,
-        //     TransactionValue = Convert.ToInt32(costOfRound),
-        //     TransactionType = new TransactionType
-        //     {
-        //         
-        //     },
-        //     ThirdPartyRoundId = "",
-        //     TransactionNotes = "",
-        //     OriginalSource = "",
-        //     UpdateSource = "",
-        //     CreatedDate = "",
-        //     UpdateDate = "",
-        //     UpdateUserId = ""
-        // };
+        if (currentBalance != null)
+        {
+            var newTransaction = new Transaction
+            {
+                Id = Guid.NewGuid().ToString(),
+                Type = "transaction",
+                EntityId = transactionQueueObject.EntityId,
+                Email = transactionQueueObject.GolferEmail,
+                AvailableTokens = (currentBalance - costOfRound) ?? 0,
+                GolferId = transactionQueueObject.GolferId,
+                GolferFirstName = transactionQueueObject.GolferFirstName,
+                GolferLastName = transactionQueueObject.GolferFirstName,
+                GolferEmail = transactionQueueObject.GolferEmail,
+                TransactionDate = DateTime.Now,
+                TransactionValue = Convert.ToInt32(costOfRound),
+                TransactionType = new TransactionType
+                {
+                    Name = "token_purchase",
+                    EntityId = transactionQueueObject.EntityId,
+                    ShortDescription = "Tokens Debit (new round)",
+                    Type = "debit",
+                    DebitOrCredit = "debit",
+                    CreatedDate = DateTime.UtcNow,
+                    UpdateDate = null,
+                    UpdateUserId = null
+                },
+                ThirdPartyRoundId = transactionQueueObject.Round.ThirdPartyScorecardId,
+                TransactionNotes = "new round",
+                OriginalSource = transactionQueueObject.Round.OriginalSource,
+                UpdateSource = null,
+                CreatedDate = DateTime.UtcNow,
+                UpdateDate = null,
+                UpdateUserId = null
+            };
         
-        return null;
+            //try to create a new transaction oncosmosdb
+            try
+            {
+                await _cosmosClient.GetContainer(_databaseId, _containerId).UpsertItemAsync(newTransaction, new PartitionKey("transaction"));
+                log.LogInformation($"<< MSL >> round we CAN charge a fee. cost: {costOfRound} tokens :: roundid: {transactionQueueObject.Round.Id} {transactionQueueObject.Round.GolferEmail}");
+
+                return newTransaction;
+            }
+            catch (Exception e)
+            {
+                log.LogError(e.Message, e);
+                throw;
+            }
+        }
+        else
+        {
+            return null;
+        }
     }
     
     private static async Task<int?> GetCurrentBalance(TransactionQueueObject transactionQueueObject, ILogger logger)
