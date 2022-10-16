@@ -2,9 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using IO.Ably;
+using IO.Ably.Realtime;
 using Microsoft.Azure.Cosmos;
 using Microsoft.Azure.WebJobs;
-using Microsoft.Azure.WebJobs.Host;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using sogoapi.data.Models;
@@ -32,6 +33,8 @@ public static class HandleTransactionQueueItems
         _databaseId = GetEnvironmentVariable("DATABASE_ID");
         _containerId = GetEnvironmentVariable("CONTAINER_ID");
 
+        var realtime = new AblyRealtime("AuK_Wg.Qpzv8Q:_mNiAO5jpHWH53V1");
+        
         _cosmosClient = new CosmosClient(_endpointUrl, _primaryKey,
             new CosmosClientOptions() {AllowBulkExecution = true, ConnectionMode = ConnectionMode.Gateway});
 
@@ -61,18 +64,33 @@ public static class HandleTransactionQueueItems
                 if (transaction != null && transaction.TransactionType.DebitOrCredit == "debit") /* there's already a debit transaction for this round */
                 {
                     log.LogInformation($"debit transaction already exists for this MSL round. {transaction.TransactionValue} tokens");
-                } else if (transaction != null)
-                {
-                    //its some other sort of transaction, maybe a credit which would be highly unusual if its
-                    //coming via the mobile app
-                }
+                } 
             }
             else if ((transactionQueueObject.Round.TransactionId == null || transactionQueueObject.Round.TransactionId == string.Empty)
                      && transactionQueueObject.Round.EntityId == "adceb3ea-52b8-4fa9-8279-633beca45417" //<== MSL 
-                     && transactionQueueObject.Round.OriginalSource != "admin_panel")
+                     && transactionQueueObject.OriginalSource != "admin_panel")
             {
-                await CreateAndSaveTransaction(transactionQueueObject, transactionQueueObject.TokenCost, log);
+                var trans = await CreateAndSaveTransaction(transactionQueueObject, transactionQueueObject.TokenCost, log);
+
+                IRealtimeChannel channel = realtime.Channels.Get($"transaction_message_{transactionQueueObject.GolferId}");
+                channel.Publish("new_round_transaction", new {transactionId = trans.Id} );
             }
+        }
+    }
+
+    private static async Task UpdateRound(TransactionQueueObject transactionQueueObject, string transId, ILogger log)
+    {
+        var updatedRound = transactionQueueObject.Round;
+        updatedRound.TransactionId = transId;
+        try
+        {
+            await _cosmosClient.GetContainer(_databaseId, _containerId).UpsertItemAsync(updatedRound, new PartitionKey("round"));
+            log.LogInformation($"transaction id {transId} added to round id: {updatedRound.Id}");
+        }
+        catch (Exception e)
+        {
+            log.LogError(e.Message, e);
+            throw;
         }
     }
 
@@ -143,7 +161,7 @@ public static class HandleTransactionQueueItems
                 TransactionValue = Convert.ToInt32(costOfRound),
                 TransactionType = new TransactionType
                 {
-                    Name = "token_purchase",
+                    Name = "token_debit",
                     EntityId = transactionQueueObject.EntityId,
                     ShortDescription = "Tokens Debit (new round)",
                     Type = "debit",
@@ -152,8 +170,9 @@ public static class HandleTransactionQueueItems
                     UpdateDate = null,
                     UpdateUserId = null
                 },
-                ThirdPartyRoundId = transactionQueueObject.Round.ThirdPartyScorecardId,
                 TransactionNotes = "new round",
+                ThirdPartyRoundId = transactionQueueObject.Round.ThirdPartyScorecardId,
+                RoundId = transactionQueueObject.Round.Id,   
                 OriginalSource = transactionQueueObject.Round.OriginalSource,
                 UpdateSource = null,
                 CreatedDate = DateTime.UtcNow,
@@ -212,6 +231,8 @@ public static class HandleTransactionQueueItems
         public string GolferEmail { get; set; }
         public string GolferFirstName { get; set; }
         public string GolferLastName { get; set; }
+        
+        public string OriginalSource { get; set; }
 
         public Round Round { get; set; }
     }
